@@ -4,63 +4,75 @@
 
 | split | source | count |
 |---|---|---|
-| train | gallery | 132 |
-| train | yc | 1179 |
-| **train** | **total** | **1311** |
-| val | gallery | 11 |
-| val | yc | 89 |
+| train | gallery | 127 |
+| train | yc | 1175 |
+| **train** | **total** | **1302** |
+| val | gallery | 15 |
+| val | yc | 85 |
 | **val** | **total** | **100** |
 | test | gallery | 14 |
 | test | yc | 106 |
 | **test** | **total** | **120** |
-| **all** | **total** | **1531** |
+| **all** | **total** | **1522** |
 
 ## Curation and re-split summary
 
 | input file | input records | passed rules 1-3 | drop rate |
 |---|---|---|---|
-| train.jsonl | 2366 | 1374 | 41.9% |
+| train.jsonl | 2366 | 1365 | 42.3% |
 | val.jsonl | 132 | 78 | 40.9% |
 | test.jsonl | 132 | 79 | 40.2% |
 
-Re-split (seed=42): moved **41** curated train records into test and **22** into val (domain-disjoint from val/test), to reach the targets. Final: train=1311, val=100, test=120.
+Re-split (seed=42): moved **41** curated train records into test and **22** into val (domain-disjoint from val/test), to reach the targets. Final: train=1302, val=100, test=120.
+
+## Per-line filter rules (a)+(b)+(c)
+
+Applied before the record-level rules: (a) drops a `<p>` line only if it starts lowercase or starts with a char that isn't a letter/digit/quote/opening-parenthesis; (b) drops a heading/button line only if it has >= 4 words AND (a non-ASCII letter OR >= 2 Romance/Germanic/Dutch function words) AND langdetect is confident (prob > 0.9) it's non-English; (c) drops the whole record if (a)+(b) removed more than 5 lines, or more than 25% of its lines.
+
+| input file | (a) `<p>` lines removed | (b) non-English heading/button lines removed | records trimmed (kept) | records dropped by (c) |
+|---|---|---|---|---|
+| train.jsonl | 2012 | 12 | 577 | 87 |
+| val.jsonl | 87 | 0 | 33 | 4 |
+| test.jsonl | 125 | 1 | 35 | 5 |
+| **total** | **2224** | **13** | **645** | **96** |
 
 ## Drop histogram (first failing rule per record)
 
 | rule | train.jsonl | val.jsonl | test.jsonl | total | description |
 |---|---|---|---|---|---|
-| hero_not_in_first3 | 274 | 15 | 16 | 305 | Rule 2: h1 present but not within the first 3 elements |
+| line_filter_too_many_removed | 87 | 4 | 5 | 96 | Rule (c): lost more than 5 lines, or more than 25% of its lines, to per-line rules (a) bad <p> starts + (b) non-English heading/button lines |
+| hero_not_in_first3 | 258 | 13 | 14 | 285 | Rule 2: h1 present but not within the first 3 elements |
 | h1_count | 7 | 0 | 0 | 7 | Rule 3: h1 count != 1 |
 | h1_words | 6 | 0 | 0 | 6 | Rule 3: h1 word count not in [2,16] |
-| p_count | 150 | 9 | 2 | 161 | Rule 3: p count not in [4,35] |
-| h2_min | 42 | 4 | 3 | 49 | Rule 3: h2 count < 2 |
-| h2_ratio | 24 | 1 | 0 | 25 | Rule 3: h2 count / element count > 0.45 |
-| max_run | 368 | 21 | 25 | 414 | Rule 3: longest consecutive same-tag run > 8 |
-| total_words | 42 | 1 | 3 | 46 | Rule 3: total words not in [120,420] |
-| no_h3h4_or_cta | 38 | 1 | 0 | 39 | Rule 3: no h3/h4 present and button count < 2 |
+| p_count | 117 | 7 | 2 | 126 | Rule 3: p count not in [4,35] |
+| h2_min | 41 | 5 | 3 | 49 | Rule 3: h2 count < 2 |
+| h2_ratio | 25 | 1 | 0 | 26 | Rule 3: h2 count / element count > 0.45 |
+| max_run | 344 | 20 | 21 | 385 | Rule 3: longest consecutive same-tag run > 8 |
+| total_words | 41 | 1 | 3 | 45 | Rule 3: total words not in [120,420] |
+| no_h3h4_or_cta | 36 | 1 | 1 | 38 | Rule 3: no h3/h4 present and button count < 2 |
 | line_too_long | 2 | 1 | 0 | 3 | Rule 3: a line has > 90 words |
 | button_repeat | 1 | 0 | 0 | 1 | Rule 3: a button text (case-folded) repeated > 2 times |
-| numeric_lines | 6 | 0 | 0 | 6 | Rule 3: >= 4 pure number/price/date lines |
-| banned_phrase | 32 | 1 | 4 | 37 | Rule 3: a line contains "cookie" / "javascript" / "subscribe to our newsletter" (case-insensitive) |
-| **total dropped** | | | | **1099** | |
+| numeric_lines | 5 | 0 | 0 | 5 | Rule 3: >= 4 pure number/price/date lines |
+| banned_phrase | 31 | 1 | 4 | 36 | Rule 3: a line contains "cookie" / "javascript" / "subscribe to our newsletter" (case-insensitive) |
+| **total dropped** | | | | **1108** | |
 
 ## Curated train: words / elements per target (percentiles)
 
 | metric | p10 | p50 | p90 |
 |---|---|---|---|
-| words | 213.0 | 391.0 | 418.0 |
-| elements | 22.0 | 35.0 | 51.0 |
+| words | 213.1 | 386.0 | 417.0 |
+| elements | 21.0 | 35.0 | 51.0 |
 
 ## Curated train: mean count per tag per record
 
 | tag | mean count |
 |---|---|
 | h1 | 1.000 |
-| h2 | 5.748 |
-| h3 | 6.485 |
-| h4 | 0.963 |
-| p | 16.435 |
-| button | 5.044 |
+| h2 | 5.733 |
+| h3 | 6.524 |
+| h4 | 0.916 |
+| p | 16.108 |
+| button | 5.115 |
 
 ## Example curated train targets (ids ending in 5 and 7, among the first 20)
 

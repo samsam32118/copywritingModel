@@ -8,15 +8,18 @@ Pipeline (applied identically to train.jsonl, val.jsonl, test.jsonl):
   1. Parse every line of `target` as a `<tag>text</tag>` element (h1/h2/h3/
      h4/p/button). Any record with a line that fails to parse is dropped.
   1.5. Per-line filters, applied before the record-level rules:
-       (a) drop <p> lines that look like bad fragments -- start lowercase,
-           start with a digit-less "of/in/from ..." stat fragment, start
-           with a non-alphanumeric non-quote character, or end without
-           sentence punctuation and have fewer than 4 words.
-       (b) drop <button>/heading lines that langdetect is confident
-           (>0.9) are not English (only checked when the line has >= 3
-           words; langdetect calls are wrapped in try/except).
-       (c) if a record loses more than 3 lines to (a)+(b) combined, the
-           whole record is dropped instead of being trimmed.
+       (a) drop a <p> line only if it starts with a lowercase letter, or
+           starts with a character that isn't a letter/digit/quote/opening
+           parenthesis.
+       (b) drop a <button>/heading line only if it has >= 4 words AND
+           (contains a non-ASCII letter OR contains >= 2 words from a small
+           Romance/Germanic/Dutch function-word list) AND langdetect is
+           confident (>0.9) it's not English (langdetect calls are wrapped
+           in try/except; lines that don't meet the word/vocabulary gate are
+           never run through langdetect at all).
+       (c) if a record loses more than 5 lines, or more than 25% of its
+           lines, to (a)+(b) combined, the whole record is dropped instead
+           of being trimmed.
   2. Normalize the hero: the single <h1> must appear within the first three
      elements, else the record is dropped; if it is not already first, it is
      moved to position 0 (all other elements keep their relative order).
@@ -81,11 +84,36 @@ _NUMERIC_RE = re.compile(
     r"(/(mo|month|yr|year|wk|week|day|hr|hour))?[kmb]?\+?$"
 )
 
+# Per-line filter constants (rules a/b, applied before the record-level rules).
+_QUOTE_CHARS = set("\"'‘’“”`")
+_P_LINE_ALLOWED_START_EXTRA = set("(")  # allowed leading non-alnum/non-quote char
+
+# Rule (b) gate: only run langdetect on heading/button lines that already
+# show some non-English signal, to avoid misfiring on short plain-English
+# marketing copy. A line qualifies if it has >= 4 words AND either contains
+# a non-ASCII letter (accents etc.) or contains >= 2 words from this small
+# list of common Romance/Germanic/Dutch function words.
+_LANG_CHECK_MIN_WORDS = 4
+_LANG_CHECK_MIN_FUNCTION_WORDS = 2
+_FUNCTION_WORDS = {
+    "de", "la", "el", "los", "las", "y", "que", "para", "con",
+    "und", "der", "die", "das", "ist", "nicht",
+    "les", "des", "une", "pour", "vous", "il",
+    "per", "che", "di", "non",
+    "het", "een", "voor",
+}
+
+# Rule (c): a record is dropped outright (instead of trimmed) if (a)+(b)
+# remove more than this many lines, OR more than this fraction of its lines.
+_MAX_LINES_LOST_ABS = 5
+_MAX_LINES_LOST_FRACTION = 0.25
+
 # Ordered list of drop-reason codes; order matches the order rules are
 # checked in (first failing rule wins), which is also the order they were
 # specified in.
 RULE_ORDER = [
     "parse_fail",
+    "line_filter_too_many_removed",
     "hero_not_in_first3",
     "h1_count",
     "h1_words",
@@ -104,6 +132,10 @@ RULE_ORDER = [
 
 RULE_DESCRIPTIONS = {
     "parse_fail": "Rule 1: a line failed to parse as <tag>...</tag>",
+    "line_filter_too_many_removed": (
+        "Rule (c): lost more than 5 lines, or more than 25% of its lines, "
+        "to per-line rules (a) bad <p> starts + (b) non-English heading/button lines"
+    ),
     "hero_not_in_first3": "Rule 2: h1 present but not within the first 3 elements",
     "h1_count": "Rule 3: h1 count != 1",
     "h1_words": "Rule 3: h1 word count not in [2,16]",
@@ -161,6 +193,70 @@ def is_number_price_date(text):
     return all(_is_numeric_token(tok) for tok in tokens)
 
 
+def should_drop_p_line(text):
+    """Per-line rule (a): drop a <p> line's text only if it
+
+      - starts with a lowercase letter, or
+      - starts with a character that is not a letter, digit, quote mark, or
+        opening parenthesis.
+    """
+    t = text.strip()
+    if not t:
+        return False
+    first = t[0]
+
+    if first.islower():
+        return True
+
+    if not (first.isalnum() or first in _QUOTE_CHARS or first in _P_LINE_ALLOWED_START_EXTRA):
+        return True
+
+    return False
+
+
+def _has_non_ascii_letter(text):
+    return any(ch.isalpha() and ord(ch) > 127 for ch in text)
+
+
+def _count_function_words(text):
+    tokens = re.findall(r"[A-Za-z]+", text.lower())
+    return sum(1 for tok in tokens if tok in _FUNCTION_WORDS)
+
+
+def _passes_lang_check_gate(text):
+    """Rule (b) gate: only lines with >= 4 words AND (a non-ASCII letter OR
+    >= 2 function words from the list) are eligible for langdetect at all."""
+    if word_count(text) < _LANG_CHECK_MIN_WORDS:
+        return False
+    if _has_non_ascii_letter(text):
+        return True
+    if _count_function_words(text) >= _LANG_CHECK_MIN_FUNCTION_WORDS:
+        return True
+    return False
+
+
+def is_confidently_non_english(text):
+    """Per-line rule (b): for a heading/button line that passes the
+    vocabulary gate (`_passes_lang_check_gate`), drop it if langdetect is
+    available and confident (probability > 0.9) that the top-detected
+    language is not English. Lines that don't pass the gate are never run
+    through langdetect and are always kept."""
+    if detect_langs is None:
+        return False
+    if not _passes_lang_check_gate(text):
+        return False
+    try:
+        results = detect_langs(text)
+    except LangDetectException:
+        return False
+    except Exception:
+        return False
+    if not results:
+        return False
+    top = results[0]
+    return top.lang != "en" and top.prob > 0.9
+
+
 def get_domain(url):
     try:
         netloc = urlparse(url).netloc.lower()
@@ -200,6 +296,38 @@ def parse_record(raw_target):
             return None
         out.append((m.group(1), m.group(2)))
     return out
+
+
+def apply_line_filters(elements):
+    """Per-line rules (a)+(b)+(c), run before the record-level rules.
+
+    Drops individual <p> lines that fail `should_drop_p_line` (rule a) and
+    individual heading/button lines that fail `is_confidently_non_english`
+    (rule b). If the total removed exceeds `_MAX_LINES_LOST_ABS` lines, or
+    exceeds `_MAX_LINES_LOST_FRACTION` of the record's original line count,
+    the whole record is dropped instead (rule c).
+
+    Returns (filtered_elements, removed_by_a, removed_by_b, drop_reason).
+    """
+    kept = []
+    removed_a = 0
+    removed_b = 0
+    for tag, text in elements:
+        if tag == "p" and should_drop_p_line(text):
+            removed_a += 1
+            continue
+        if tag in ("h1", "h2", "h3", "h4", "button") and is_confidently_non_english(text):
+            removed_b += 1
+            continue
+        kept.append((tag, text))
+
+    total_removed = removed_a + removed_b
+    total_lines = len(elements)
+    if total_removed > _MAX_LINES_LOST_ABS or (
+        total_lines > 0 and total_removed > _MAX_LINES_LOST_FRACTION * total_lines
+    ):
+        return kept, removed_a, removed_b, "line_filter_too_many_removed"
+    return kept, removed_a, removed_b, None
 
 
 def normalize_hero(elements):
@@ -304,17 +432,33 @@ def rebuild_record(r, elements):
 
 
 def curate_records(records):
-    """Apply rules 1-4 to a list of raw records.
+    """Apply rules 1, 1.5 (a/b/c), 2-4 to a list of raw records.
 
-    Returns (kept_records, drop_counter, total)."""
+    Returns (kept_records, drop_counter, total, line_filter_stats) where
+    line_filter_stats is a dict with the number of lines removed by rule
+    (a), the number removed by rule (b), and the number of records that
+    were kept but had >=1 line trimmed by (a)/(b)."""
     kept = []
     drops = Counter()
+    removed_a_total = 0
+    removed_b_total = 0
+    records_trimmed = 0
     for r in records:
         parsed = parse_record(r["target"])
         if parsed is None:
             drops["parse_fail"] += 1
             continue
-        elements, hero_reason = normalize_hero(parsed)
+
+        filtered, removed_a, removed_b, line_reason = apply_line_filters(parsed)
+        removed_a_total += removed_a
+        removed_b_total += removed_b
+        if line_reason:
+            drops[line_reason] += 1
+            continue
+        if removed_a + removed_b > 0:
+            records_trimmed += 1
+
+        elements, hero_reason = normalize_hero(filtered)
         if hero_reason:
             drops[hero_reason] += 1
             continue
@@ -323,7 +467,13 @@ def curate_records(records):
             drops[reason] += 1
             continue
         kept.append(rebuild_record(r, elements))
-    return kept, drops, len(records)
+
+    line_filter_stats = {
+        "removed_a": removed_a_total,
+        "removed_b": removed_b_total,
+        "records_trimmed": records_trimmed,
+    }
+    return kept, drops, len(records), line_filter_stats
 
 
 def resplit(curated_train, curated_val, curated_test, target_val, target_test, seed):
@@ -433,6 +583,7 @@ def build_stats_md(
     final_splits,
     resplit_info,
     curated_base_counts,
+    line_filter_stats_by_file,
 ):
     final_train, final_val, final_test = final_splits
     lines = []
@@ -474,6 +625,34 @@ def build_stats_md(
             f"reaching target counts (shortfall_test={resplit_info['shortfall_test']}, "
             f"shortfall_val={resplit_info['shortfall_val']})."
         )
+    lines.append("")
+
+    # --- per-line filter rules (a)+(b)+(c) ---
+    lines.append("## Per-line filter rules (a)+(b)+(c)\n")
+    lines.append(
+        "Applied before the record-level rules: (a) drops a `<p>` line only "
+        "if it starts lowercase or starts with a char that isn't a "
+        "letter/digit/quote/opening-parenthesis; (b) drops a heading/button "
+        "line only if it has >= 4 words AND (a non-ASCII letter OR >= 2 "
+        "Romance/Germanic/Dutch function words) AND langdetect is confident "
+        "(prob > 0.9) it's non-English; (c) drops the whole record if "
+        "(a)+(b) removed more than 5 lines, or more than 25% of its lines.\n"
+    )
+    lines.append("| input file | (a) `<p>` lines removed | (b) non-English heading/button lines removed | records trimmed (kept) | records dropped by (c) |")
+    lines.append("|---|---|---|---|---|")
+    total_a = total_b = total_trimmed = total_c = 0
+    for fname in ("train.jsonl", "val.jsonl", "test.jsonl"):
+        lfs = line_filter_stats_by_file[fname]
+        c_dropped = drop_by_file[fname].get("line_filter_too_many_removed", 0)
+        lines.append(
+            f"| {fname} | {lfs['removed_a']} | {lfs['removed_b']} | "
+            f"{lfs['records_trimmed']} | {c_dropped} |"
+        )
+        total_a += lfs["removed_a"]
+        total_b += lfs["removed_b"]
+        total_trimmed += lfs["records_trimmed"]
+        total_c += c_dropped
+    lines.append(f"| **total** | **{total_a}** | **{total_b}** | **{total_trimmed}** | **{total_c}** |")
     lines.append("")
 
     # --- drop histogram ---
@@ -589,10 +768,12 @@ def main():
 
     curated = {}
     drop_by_file = {}
+    line_filter_stats_by_file = {}
     for key in ("train.jsonl", "val.jsonl", "test.jsonl"):
-        kept, drops, total = curate_records(raw[key])
+        kept, drops, total, line_filter_stats = curate_records(raw[key])
         curated[key] = kept
         drop_by_file[key] = drops
+        line_filter_stats_by_file[key] = line_filter_stats
 
     curated_base_counts = {k: len(v) for k, v in curated.items()}
 
@@ -611,6 +792,7 @@ def main():
         final_splits=(final_train, final_val, final_test),
         resplit_info=resplit_info,
         curated_base_counts=curated_base_counts,
+        line_filter_stats_by_file=line_filter_stats_by_file,
     )
     (output_dir / "stats.md").write_text(stats_md, encoding="utf-8")
 
@@ -621,12 +803,28 @@ def main():
     for key in ("train.jsonl", "val.jsonl", "test.jsonl"):
         total = input_counts[key]
         kept = curated_base_counts[key]
+        lfs = line_filter_stats_by_file[key]
         print(f"\n[{key}] input={total}  kept(rules 1-3)={kept}  dropped={total - kept}")
+        print(
+            f"  per-line rules (a)+(b): removed {lfs['removed_a']} <p> lines (a), "
+            f"{lfs['removed_b']} non-English heading/button lines (b); "
+            f"{lfs['records_trimmed']} surviving records had lines trimmed"
+        )
         print("  drop reasons (first failing rule):")
         for code in RULE_ORDER:
             c = drop_by_file[key].get(code, 0)
             if c:
-                print(f"    {code:<20} {c:>5}   ({RULE_DESCRIPTIONS[code]})")
+                print(f"    {code:<28} {c:>5}   ({RULE_DESCRIPTIONS[code]})")
+
+    total_removed_a = sum(s["removed_a"] for s in line_filter_stats_by_file.values())
+    total_removed_b = sum(s["removed_b"] for s in line_filter_stats_by_file.values())
+    total_dropped_c = sum(drop_by_file[k].get("line_filter_too_many_removed", 0) for k in drop_by_file)
+    print(
+        f"\nPer-line rules (a)+(b) totals across all input files: "
+        f"{total_removed_a} <p> lines removed (a), {total_removed_b} heading/button "
+        f"lines removed (b), {total_removed_a + total_removed_b} lines removed in total; "
+        f"{total_dropped_c} records dropped by rule (c) (>5 lines or >25% of lines lost)."
+    )
 
     print("\nRe-split (seed={}):".format(args.seed))
     print(f"  moved_to_test={resplit_info['moved_to_test']}  moved_to_val={resplit_info['moved_to_val']}")
