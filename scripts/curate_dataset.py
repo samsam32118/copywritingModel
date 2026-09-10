@@ -7,6 +7,16 @@ quality-filtered, re-split copy.
 Pipeline (applied identically to train.jsonl, val.jsonl, test.jsonl):
   1. Parse every line of `target` as a `<tag>text</tag>` element (h1/h2/h3/
      h4/p/button). Any record with a line that fails to parse is dropped.
+  1.5. Per-line filters, applied before the record-level rules:
+       (a) drop <p> lines that look like bad fragments -- start lowercase,
+           start with a digit-less "of/in/from ..." stat fragment, start
+           with a non-alphanumeric non-quote character, or end without
+           sentence punctuation and have fewer than 4 words.
+       (b) drop <button>/heading lines that langdetect is confident
+           (>0.9) are not English (only checked when the line has >= 3
+           words; langdetect calls are wrapped in try/except).
+       (c) if a record loses more than 3 lines to (a)+(b) combined, the
+           whole record is dropped instead of being trimmed.
   2. Normalize the hero: the single <h1> must appear within the first three
      elements, else the record is dropped; if it is not already first, it is
      moved to position 0 (all other elements keep their relative order).
@@ -36,6 +46,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:
+    from langdetect import detect_langs, DetectorFactory, LangDetectException
+    DetectorFactory.seed = 0
+except Exception:  # pragma: no cover - guarded import
+    detect_langs = None
+    LangDetectException = Exception
 
 # ---------------------------------------------------------------------------
 # Constants
