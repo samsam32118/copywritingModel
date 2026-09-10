@@ -73,8 +73,8 @@ CODE_START_RE = re.compile(
 FUNC_CALL_RE = re.compile(r"^[A-Za-z_][\w.]*\([^\n]*\)$")
 BUTTON_JUNK_RE = re.compile(
     r"(?i)^("
-    r"log ?in|sign ?in|menu|close|"
-    r"close (notification|menu|dialog|modal|banner|popup|announcement|alert|nav|cookie).*|"
+    r"log ?in|sign ?in|menu|close|dismiss|"
+    r"(close|dismiss) (notification|menu|dialog|modal|banner|popup|announcement|alert|nav|cookie).*|"
     r"accept|decline|ok|got it|×|"
     r"cookie.*|privacy.*|terms.*|english|toggle.*|skip.*|back to top|"
     r"open menu.*|next|previous|play|pause|"
