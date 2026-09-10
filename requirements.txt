@@ -1,0 +1,20 @@
+# Python 3.11
+# Core ML stack — pinned to match every run's run_config.json (see README > Reproducibility).
+torch==2.14.0        # CPU build; if pip resolves a CUDA wheel, install from https://download.pytorch.org/whl/cpu instead
+transformers==5.17.0
+peft==0.20.0
+trl==1.13.0
+datasets==5.0.1
+
+# Scraping / dataset pipeline (scrape_pages.py, build_dataset.py, curate_dataset.py)
+beautifulsoup4
+lxml
+requests
+langdetect
+
+# Evaluation (evaluate.py)
+rouge-score
+
+# Required by the pinned stack above (CPU dispatch, tokenizers)
+accelerate
+sentencepiece
