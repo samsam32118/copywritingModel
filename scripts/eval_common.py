@@ -230,10 +230,12 @@ def assistant_token_span(tokenizer, record: dict, enable_thinking: bool = False)
     # prompt_ids should be an exact prefix of full_ids; fall back to the
     # longest common prefix if a template tokenizes the boundary slightly
     # differently depending on what follows (rare, but cheap to guard).
+    # In the normal case prompt_ids is an exact prefix of full_ids and
+    # _prefix_len == len(prompt_ids). If a template tokenizes the boundary
+    # differently once real content follows it (rare), the verified common
+    # prefix is the only length we can be sure is still shared prompt/
+    # scaffold text, so use it as-is rather than trusting len(prompt_ids).
     prompt_len = _prefix_len(prompt_ids, full_ids)
-    if prompt_len < len(prompt_ids):
-        prompt_len = len(prompt_ids)
-        prompt_len = min(prompt_len, len(full_ids))
     return full_ids, prompt_len
 
 

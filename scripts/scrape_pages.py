@@ -66,10 +66,21 @@ JUNK_CLASS_ID_RE = re.compile(
 )
 CTA_RE = re.compile(r"(?i)btn|button|cta")
 WALK_TAGS = ["h1", "h2", "h3", "h4", "p", "button", "a"]
+CODE_START_RE = re.compile(
+    r"^(import|from|class|def|func|function|const|let|var|public|private|"
+    r"override|package|return|struct|enum|interface|protocol)\b"
+)
+FUNC_CALL_RE = re.compile(r"^[A-Za-z_][\w.]*\([^\n]*\)$")
 BUTTON_JUNK_RE = re.compile(
-    r"(?i)^(log ?in|sign ?in|menu|close|accept|decline|ok|got it|×|"
-    r"cookie.*|privacy.*|terms.*|english|toggle.*|skip to.*|back to top|"
-    r"open menu|next|previous|play|pause)$"
+    r"(?i)^("
+    r"log ?in|sign ?in|menu|close|"
+    r"close (notification|menu|dialog|modal|banner|popup|announcement|alert|nav|cookie).*|"
+    r"accept|decline|ok|got it|×|"
+    r"cookie.*|privacy.*|terms.*|english|toggle.*|skip.*|back to top|"
+    r"open menu.*|next|previous|play|pause|"
+    r"(go ?to) (slide|chapter|step|page)\s*\d*|"
+    r"(previous|next) (slide|chapter|step|page)"
+    r")$"
 )
 
 _domain_locks = {}
@@ -224,6 +235,30 @@ def get_element_text(tag):
     return dedupe_adjacent_repeats(text)
 
 
+def looks_like_code(text):
+    """Heuristic: is this <p> actually a line of an embedded SDK code sample?
+
+    Many devtool landing pages (heavily represented in YC) render quickstart
+    code blocks as one <p>/line instead of semantic <pre>/<code>, so our
+    generic walk would otherwise capture "import Foo", "class Bar {", etc.
+    as paragraph copy. Matching is deliberately case-sensitive on keywords
+    so a normal, capitalized English sentence ("Import your contacts...")
+    is never caught.
+    """
+    t = text.strip()
+    if not t:
+        return False
+    if t.startswith("//"):
+        return True
+    if CODE_START_RE.match(t):
+        return True
+    if t.endswith("{") or t.endswith("};") or t.endswith(");"):
+        return True
+    if FUNC_CALL_RE.match(t):
+        return True
+    return False
+
+
 def is_cta_anchor(tag):
     classes = tag.get("class") or []
     class_str = " ".join(classes) if isinstance(classes, (list, tuple)) else str(classes)
@@ -261,6 +296,8 @@ def extract_elements(soup):
         words = text.split()
         wc = len(words)
         if out_tag == "p" and (wc < 2 or wc > 90):
+            continue
+        if out_tag == "p" and looks_like_code(text):
             continue
         if out_tag == "button":
             if wc < 1 or wc > 7:
