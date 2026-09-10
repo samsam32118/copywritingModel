@@ -186,6 +186,22 @@ def apply_chat_template_safe(
             ) from e2
 
 
+def encode_prompts(tokenizer, prompts, **kwargs):
+    """Tokenize already-templated chat prompt strings for generation.
+
+    Uses add_special_tokens=False: the chat template already emits the BOS
+    token (LFM2.5 renders "<|startoftext|>" itself), and letting the tokenizer
+    prepend another one would feed the model a doubled BOS that training never
+    saw -- training tokenizes through apply_chat_template(tokenize=True), which
+    adds no extra special tokens. Keeping both paths identical is what makes
+    eval numbers comparable to the training objective.
+    """
+    kwargs.setdefault("return_tensors", "pt")
+    kwargs.setdefault("padding", True)
+    kwargs.setdefault("truncation", True)
+    return tokenizer(prompts, add_special_tokens=False, **kwargs)
+
+
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 THINK_OPEN_RE = re.compile(r"<think>.*\Z", re.IGNORECASE | re.DOTALL)
 

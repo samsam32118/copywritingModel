@@ -271,6 +271,9 @@ def make_jsonl_logger_callback(path, total_steps):
             self.f = None
             self.last_tokens = 0
             self.last_time = None
+            # Tokens already counted when training starts (non-zero on resume),
+            # so throughput can be reported for THIS run only.
+            self.tokens_at_begin = 0.0
 
         def on_train_begin(self, args, state, control, **kwargs):
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -278,6 +281,7 @@ def make_jsonl_logger_callback(path, total_steps):
             self.t0 = time.time()
             self.last_time = self.t0
             self.last_tokens = float(getattr(state, "num_input_tokens_seen", 0) or 0)
+            self.tokens_at_begin = self.last_tokens
 
         def on_log(self, args, state, control, logs=None, **kwargs):
             if self.f is None or not logs:
@@ -568,7 +572,8 @@ def main(argv=None):
         tokenizer.chat_template = chat_template
 
     log_path = os.path.join(args.out_dir, "train_log.jsonl")
-    callbacks = [make_jsonl_logger_callback(log_path, total_steps)]
+    jsonl_logger = make_jsonl_logger_callback(log_path, total_steps)
+    callbacks = [jsonl_logger]
 
     t_trainer = time.time()
     trainer = SFTTrainer(
@@ -622,8 +627,12 @@ def main(argv=None):
     train_seconds = time.time() - t_train
     metrics = dict(result.metrics)
     tokens_seen = float(getattr(trainer.state, "num_input_tokens_seen", 0) or 0)
-    tok_per_s = tokens_seen / train_seconds if train_seconds > 0 else 0.0
-    log(f"training finished in {train_seconds:.1f}s | {tokens_seen:.0f} tokens | {tok_per_s:.2f} tok/s | peak rss {peak_rss_gb():.2f} GB")
+    tokens_this_run = max(tokens_seen - getattr(jsonl_logger, "tokens_at_begin", 0.0), 0.0)
+    tok_per_s = tokens_this_run / train_seconds if train_seconds > 0 else 0.0
+    log(
+        f"training finished in {train_seconds:.1f}s | {tokens_this_run:.0f} tokens this run "
+        f"({tokens_seen:.0f} cumulative) | {tok_per_s:.2f} tok/s | peak rss {peak_rss_gb():.2f} GB"
+    )
 
     # ---------------- final eval ----------------
     eval_metrics = {}
@@ -689,6 +698,7 @@ def main(argv=None):
             "eval_metrics": eval_metrics,
             "train_seconds": round(train_seconds, 2),
             "tokens_seen_non_padding": int(tokens_seen),
+            "tokens_seen_this_run": int(tokens_this_run),
             "tokens_per_second": round(tok_per_s, 2),
             "peak_rss_gb": round(peak_rss_gb(), 3),
             "wall_seconds_total": round(time.time() - t_start, 2),

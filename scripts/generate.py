@@ -91,7 +91,7 @@ def main():
                 )
                 for r in batch
             ]
-            enc = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
+            enc = ec.encode_prompts(tokenizer, prompts)
             input_len = enc["input_ids"].shape[1]
 
             t0 = time.time()
